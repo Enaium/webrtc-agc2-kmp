@@ -1,0 +1,2 @@
+headers = webrtc_agc2_c.h cinterop_helpers.h
+compilerOpts = -std=c11

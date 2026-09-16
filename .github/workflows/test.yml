@@ -1,0 +1,282 @@
+name: Test
+
+"on":
+  workflow_dispatch:
+
+# Publishes every artifact to the local Maven repository and runs the test
+# suites for each platform. Each matrix entry covers the artifacts that its
+# runner can build:
+#
+#   macOS ARM64    -> :agc2 (multiplatform module), darwin JNI, JVM + native tests
+#   Linux x64      -> linux JNI (x86_64 + aarch64 cross), JVM + native klibs
+#   Windows x64    -> windows JNI (MinGW), JVM tests
+#   Android        -> JNI shared library for every ABI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-macos:
+    name: Test macOS ARM64
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+          ls -la "$RUNNER_TEMP/signing-key.gpg"
+          head -c 16 "$RUNNER_TEMP/signing-key.gpg" | od -c | head -2
+
+      - name: Publish all platforms to Maven Local
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :agc2:publishToMavenLocal
+          :jni-jvm-darwin-aarch64:publishToMavenLocal
+          :jni-jvm-darwin-x86_64:publishToMavenLocal
+
+      - name: Run JVM tests
+        run: ./gradlew --no-daemon :agc2:jvmTest
+
+      - name: Run native tests
+        run: ./gradlew --no-daemon :agc2:macosArm64Test
+
+      - name: Build the waveform example
+        # The example needs audio devices at runtime, which the runners do not
+        # have, so the compile and link steps are validated here: the JVM
+        # classes plus the full native executable (which is what proves the
+        # entry point and the static library linkage).
+        run: >
+          ./gradlew --no-daemon
+          :examples:waveform:compileKotlinJvm
+          :examples:waveform:linkDebugExecutableMacosArm64
+
+      - name: Smoke run the waveform example (headless)
+        # SDL's dummy video driver keeps the window off-screen; the example
+        # renders a bounded number of frames and exits. Runners have no capture
+        # or playback device, which the pipeline reports and retries past; the
+        # synthetic signal source is what keeps the frames flowing.
+        run: >
+          SDL_VIDEO_DRIVER=dummy ./gradlew --no-daemon
+          :examples:waveform:jvmRun --args="--frames 120"
+
+  test-linux:
+    name: Test Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install cross-compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+          ls -la "$RUNNER_TEMP/signing-key.gpg"
+          head -c 16 "$RUNNER_TEMP/signing-key.gpg" | od -c | head -2
+
+      - name: Publish agc2 linuxX64/mingwX64 + linux JNI to Maven Local
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :agc2:publishLinuxX64PublicationToMavenLocal
+          :agc2:publishMingwX64PublicationToMavenLocal
+          :jni-jvm-linux-x86_64:publishToMavenLocal
+          :jni-jvm-linux-aarch64:publishToMavenLocal
+
+      - name: Run JVM tests
+        run: ./gradlew --no-daemon :agc2:jvmTest
+
+      - name: Compile native klibs (linuxX64, mingwX64)
+        # webrtc-agc2 requires C++20, but Kotlin/Native's Linux toolchain ships
+        # gcc-8.3/libstdc++ which cannot link the test binary. Compiling the
+        # klibs still validates that cinterop embeds the static libraries built
+        # on this host (linuxX64 natively, mingwX64 via MinGW).
+        run: >
+          ./gradlew --no-daemon
+          :agc2:compileKotlinLinuxX64
+          :agc2:compileKotlinMingwX64
+
+      - name: Compile the waveform example (linuxX64, mingwX64)
+        # The example's own native targets for the two ABIs that cross-compile
+        # from Linux; the executable itself is only linked on a matching host.
+        run: >
+          ./gradlew --no-daemon
+          :examples:waveform:compileKotlinLinuxX64
+          :examples:waveform:compileKotlinMingwX64
+
+      - name: Verify embedded static libraries
+        run: |
+          for t in linuxX64 mingwX64; do
+            klib=$(find agc2/build -name "*${t}Cinterop-webrtcAgc2*.klib" | grep -v asc | head -1)
+            echo "=== $t: $klib ==="
+            if unzip -l "$klib" | grep -q "\.a$"; then
+              echo "OK: static library embedded"
+            else
+              echo "FAIL: no static library in $t klib"
+              exit 1
+            fi
+          done
+
+  test-windows:
+    name: Test Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install MinGW
+        shell: pwsh
+        run: |
+          choco install mingw -y --no-progress
+          # The JVM needs MinGW's runtime DLLs (libwinpthread-1.dll,
+          # libgcc_s_seh-1.dll) on PATH to load the JNI DLL.
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Decode signing key
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes(
+            "$env:RUNNER_TEMP\signing-key.gpg",
+            [Convert]::FromBase64String("${{ secrets.SIGNING_KEY }}")
+          )
+          Get-Item "$env:RUNNER_TEMP\signing-key.gpg" | Select-Object Length
+          Format-Hex -Path "$env:RUNNER_TEMP\signing-key.gpg" -Count 16
+
+      - name: Publish windows JNI to Maven Local
+        shell: cmd
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}\signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :jni-jvm-windows-x86_64:publishToMavenLocal
+
+      - name: Run JVM tests
+        run: ./gradlew --no-daemon --stacktrace :agc2:jvmTest
+
+      - name: Compile native klib (mingwX64)
+        # Same toolchain limitation as linuxX64 (gcc-8.3, no C++20).
+        run: ./gradlew --no-daemon :agc2:compileKotlinMingwX64
+
+  test-android:
+    name: Test Android
+    # GitHub-hosted runners don't support nested virtualization, so Android
+    # emulators can't boot with hardware acceleration (KVM on Linux, HVF on
+    # macOS): the AAR is assembled and the JNI shared library is built for
+    # every ABI, instrumented tests must be run on a local device.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | tr -d ' \n' | base64 -d > "$RUNNER_TEMP/signing-key.gpg"
+          ls -la "$RUNNER_TEMP/signing-key.gpg"
+          head -c 16 "$RUNNER_TEMP/signing-key.gpg" | od -c | head -2
+
+      - name: Publish android AAR + metadata to Maven Local
+        # Only the metadata + android publications: the Apple and androidNative
+        # target klibs are published by the jobs whose runners can build their
+        # static libraries.
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          -Psigning.keyId="${{ secrets.SIGNING_KEY_ID }}"
+          -Psigning.secretKeyRingFile="${{ runner.temp }}/signing-key.gpg"
+          -Psigning.password="${{ secrets.SIGNING_PASSWORD }}"
+          :agc2:publishKotlinMultiplatformPublicationToMavenLocal
+          :agc2:publishAndroidPublicationToMavenLocal
+
+      - name: Assemble the AAR with the JNI libraries
+        run: ./gradlew --no-daemon :agc2:assembleAndroidMain
+
+      - name: Assemble example apps and androidTest APK
+        run: >
+          ./gradlew --no-daemon
+          :examples:basic:assembleDebug
+          :examples:basic:assembleDebugAndroidTest
+          :examples:waveform:android:assembleDebug
+
+      - name: Verify the JNI library per ABI
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            lib="agc2/build/jniLibs/$abi/libwebrtc_agc2_jni.so"
+            echo "=== $abi: $lib ==="
+            if [ ! -f "$lib" ]; then
+              echo "FAIL: no JNI library for $abi"
+              exit 1
+            fi
+            echo "OK: $(du -h "$lib" | cut -f1)"
+          done
+
+      - name: Verify embedded static libraries (androidNative)
+        # The AAR above built libwebrtc_agc2.a for every ABI with the NDK and
+        # embedded it into each androidNative cinterop klib (the same klibs the
+        # publish job ships). Android native cinterop output stays unpacked, so
+        # the embedded archive is checked where the linker finds it.
+        run: |
+          for t in androidNativeArm64 androidNativeArm32 androidNativeX64 androidNativeX86; do
+            lib=$(find "agc2/build/classes/kotlin/$t" -name libwebrtc_agc2.a | head -1)
+            echo "=== $t: $lib ==="
+            if [ -z "$lib" ]; then
+              echo "FAIL: no static library in the $t cinterop klib"
+              exit 1
+            fi
+            echo "OK: static library embedded ($(du -h "$lib" | cut -f1))"
+          done
