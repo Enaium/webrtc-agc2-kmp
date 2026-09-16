@@ -108,11 +108,31 @@ if(NOT WIN32)
     list(FILTER AGC2_SRC EXCLUDE REGEX ".*rtc_base/win32\\.cc$")
 endif()
 
+# GCC does not see the declaration of memcpy that api/audio_view.h uses: Clang
+# and MSVC pull <cstring> in through their own headers, GCC does not, and the
+# Linux and MinGW builds are GCC.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(webrtc_agc2 PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-include>
+        $<$<COMPILE_LANGUAGE:CXX>:cstring>)
+endif()
+
+# rtc_base/platform_thread_types.cc is upstream MSVC code on Windows (__try /
+# __except for the thread name), which GCC cannot parse; the MinGW build takes
+# the replacement translation unit instead.
+if(MINGW)
+    list(FILTER AGC2_SRC EXCLUDE REGEX ".*rtc_base/platform_thread_types\\.cc$")
+endif()
+
 target_sources(webrtc_agc2 PRIVATE ${AGC2_SRC})
 target_sources(webrtc_agc2 PRIVATE
     ${C_API_DIR}/webrtc_agc2_c.cc
     ${C_API_DIR}/webrtc_agc2_c.h
 )
+
+if(MINGW)
+    target_sources(webrtc_agc2 PRIVATE ${C_API_DIR}/webrtc_agc2_mingw_thread.cc)
+endif()
 
 target_include_directories(webrtc_agc2 PUBLIC
     ${WEBRTC_AGC2_DIR}/src/
