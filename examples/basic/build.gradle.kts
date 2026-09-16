@@ -44,8 +44,11 @@ kotlin {
 }
 
 dependencies {
-    // Consume the artifact published to the local Maven repository
-    implementation("cn.enaium.webrtc.agc2:webrtc-agc2-kmp:1.0.0")
+    // The module itself: an example built from this repository should not need a
+    // published artifact to resolve, and the repositories deliberately do not
+    // include Maven Local.
+    implementation(project(":agc2"))
+
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

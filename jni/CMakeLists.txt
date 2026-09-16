@@ -98,7 +98,13 @@ endif()
 
 # Exclude NEON files on non-ARM platforms (they include arm_neon.h).
 if(EFFECTIVE_ARCH MATCHES "aarch64|arm64|ARM64")
-    target_compile_definitions(webrtc_agc2 PRIVATE WEBRTC_HAS_NEON)
+    # rtc_base/system/arch.h defines the ARM *family* but never the arch macro
+    # itself, and two places key off it: rtc_base/platform_thread_types.cc
+    # includes <asm/unistd_64.h> (x86 only, and absent from the aarch64
+    # sysroots) unless WEBRTC_ARCH_ARM64 is defined, and
+    # audio_processing/agc2/rnn_vad/vector_math.h picks its NEON path only with
+    # it.
+    target_compile_definitions(webrtc_agc2 PRIVATE WEBRTC_HAS_NEON WEBRTC_ARCH_ARM64)
 else()
     list(FILTER AGC2_SRC EXCLUDE REGEX ".*_neon\\.cc$")
 endif()
