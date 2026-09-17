@@ -35,7 +35,7 @@ An RNN voice activity detector (`rnn_vad/`) inside the module drives the adaptiv
 **Kotlin Multiplatform / Android:**
 
 ```kotlin
-implementation("cn.enaium.webrtc.agc2:webrtc-agc2-kmp:1.0.0")
+implementation("cn.enaium.webrtc.agc2:webrtc-agc2-kmp:1.0.1")
 ```
 
 > Built with Kotlin 2.4.10: consumers need a Kotlin 2.4+ compiler, since older ones cannot read the 2.4 metadata of the published artifacts.
