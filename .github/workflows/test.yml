@@ -120,15 +120,18 @@ jobs:
       - name: Run JVM tests
         run: ./gradlew --no-daemon :agc2:jvmTest
 
-      - name: Compile native klibs (linuxX64, mingwX64)
-        # webrtc-agc2 requires C++20, but Kotlin/Native's Linux toolchain ships
-        # gcc-8.3/libstdc++ which cannot link the test binary. Compiling the
-        # klibs still validates that cinterop embeds the static libraries built
-        # on this host (linuxX64 natively, mingwX64 via MinGW).
+      - name: Run native tests (linuxX64) and link the mingwX64 test binary
+        # The static libraries embedded in the klibs are linked by
+        # Kotlin/Native against the runtimes its own sysroot pins (GCC 8.3
+        # libstdc++ and glibc 2.19 for linuxX64, MSYS2 GCC 9.2 for mingwX64),
+        # not against the host's, so the link is what validates that the
+        # archives reference no symbol those runtimes lack. The linuxX64 suite
+        # runs here as well; the mingwX64 binary can only be linked on this
+        # runner (it runs on the Windows runner).
         run: >
           ./gradlew --no-daemon
-          :agc2:compileKotlinLinuxX64
-          :agc2:compileKotlinMingwX64
+          :agc2:linuxX64Test
+          :agc2:linkDebugTestMingwX64
 
       - name: Compile the waveform example (linuxX64, mingwX64)
         # The example's own native targets for the two ABIs that cross-compile
@@ -199,9 +202,11 @@ jobs:
       - name: Run JVM tests
         run: ./gradlew --no-daemon --stacktrace :agc2:jvmTest
 
-      - name: Compile native klib (mingwX64)
-        # Same toolchain limitation as linuxX64 (gcc-8.3, no C++20).
-        run: ./gradlew --no-daemon :agc2:compileKotlinMingwX64
+      - name: Run native tests (mingwX64)
+        # MinGW is the native toolchain on this runner, so :agc2 builds the
+        # mingwX64 static library here (see the native build registration in
+        # agc2/build.gradle.kts) and the test binary links and runs against it.
+        run: ./gradlew --no-daemon :agc2:mingwX64Test
 
   test-android:
     name: Test Android
@@ -245,6 +250,13 @@ jobs:
 
       - name: Assemble the AAR with the JNI libraries
         run: ./gradlew --no-daemon :agc2:assembleAndroidMain
+
+      - name: Run Android host tests
+        # The shared suite compiled into the android target runs on the JVM
+        # against the host's JNI library (see the AndroidHostTest wiring in
+        # agc2/build.gradle.kts); only the instrumented tests above need a
+        # device.
+        run: ./gradlew --no-daemon :agc2:testAndroidHostTest
 
       - name: Assemble example apps and androidTest APK
         run: >

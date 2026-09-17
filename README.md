@@ -26,7 +26,7 @@ An RNN voice activity detector (`rnn_vad/`) inside the module drives the adaptiv
 | **iOS**        | arm64, x64, simulatorArm64                                   | Kotlin/Native cinterop (static library)    |
 | **macOS**      | arm64, x86_64                                                | Kotlin/Native cinterop (static library)    |
 | **Linux**      | x86_64                                                       | Kotlin/Native cinterop (static library)    |
-| **Windows**    | mingwX64                                                     | Kotlin/Native cinterop (bindings)          |
+| **Windows**    | mingwX64                                                     | Kotlin/Native cinterop (static library)    |
 | **tvOS**       | arm64, simulatorArm64                                        | Kotlin/Native cinterop (static library)    |
 | **watchOS**    | arm64, simulatorArm64, deviceArm64                           | Kotlin/Native cinterop (static library)    |
 

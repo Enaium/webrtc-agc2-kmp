@@ -140,6 +140,26 @@ if(MINGW)
     target_sources(webrtc_agc2 PRIVATE ${C_API_DIR}/webrtc_agc2_mingw_thread.cc)
 endif()
 
+# Kotlin/Native links its linuxX64 and mingwX64 binaries against the libstdc++
+# 6.0.25 that ships in its bundled gcc-8.3 target toolchain (and, for mingwX64,
+# the MSYS2 gcc 9.2 runtime), not against the libstdc++ of the machine that
+# built this library. Those runtimes predate std::__cxx11::basic_string::
+# _M_replace_cold (GCC 12), which the host compiler emits for the in-place
+# std::string operations here, so a static library built with the default ABI
+# leaves lld with an undefined symbol and the consumer's program fails to link.
+# Building the library that gets embedded into the cinterop klibs against the
+# classic std::string ABI keeps the whole __cxx11 string family inside that
+# sysroot - both runtimes still export the old-ABI string symbols - and
+# webrtc_agc2_kn_compat.cc covers the references that remain.
+#
+# Only the Kotlin/Native builds (BUILD_JNI=OFF): the JNI shared libraries link
+# the libstdc++ of the machine that runs them, and the Apple and Android native
+# targets use libc++ throughout.
+if(NOT MSVC AND NOT APPLE AND NOT ANDROID AND NOT BUILD_JNI)
+    target_compile_definitions(webrtc_agc2 PRIVATE _GLIBCXX_USE_CXX11_ABI=0)
+    target_sources(webrtc_agc2 PRIVATE ${C_API_DIR}/webrtc_agc2_kn_compat.cc)
+endif()
+
 target_include_directories(webrtc_agc2 PUBLIC
     ${WEBRTC_AGC2_DIR}/src/
     ${C_API_DIR}

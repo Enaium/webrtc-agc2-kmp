@@ -72,6 +72,10 @@ fun canBuildNativeTarget(targetName: String): Boolean {
         hostOs.isMacOsX && targetName.startsWith("tvos") -> true
         hostOs.isMacOsX && targetName.startsWith("watchos") -> true
         hostOs.isLinux && (targetName == "linuxX64" || targetName == "mingwX64") -> true
+        // On Windows, MinGW is the native toolchain, so mingw_x64 static
+        // libraries build there too (the Windows CI job links and runs the
+        // mingwX64 tests with it).
+        hostOs.isWindows && targetName == "mingwX64" -> true
         // Android native (Kotlin/Native) static libraries are cross-compiled
         // with the NDK toolchain, which any host with the NDK can run.
         targetName.startsWith("androidNative") && androidNdkToolchain?.isFile == true -> true
@@ -423,6 +427,14 @@ if (hostOs.isMacOsX) {
             "-DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++",
             "-DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres",
         ),
+    )
+} else if (hostOs.isWindows) {
+    // MinGW is the native toolchain here, so no cross-compilation flags are
+    // needed; the generator is picked the same way the Windows JNI subproject
+    // does it (MSVC is avoided: webrtc-agc2 relies on GCC extensions).
+    registerNativeBuildTasks(
+        "mingwX64",
+        listOf("-G", if (System.getenv("MSYSTEM") != null) "MSYS Makefiles" else "MinGW Makefiles"),
     )
 }
 

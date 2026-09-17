@@ -1,2 +1,6 @@
 headers = webrtc_agc2_c.h cinterop_helpers.h
 compilerOpts = -std=c11
+# rtc_base/time_utils.cc calls timeGetTime() on Windows. The JNI target links
+# winmm explicitly; a Kotlin/Native link only sees this klib, so declare the
+# dependency here and K/N adds it to the final link line for mingwX64.
+linkerOpts.mingw_x64 = -lwinmm
