@@ -200,6 +200,9 @@ class WaveformWindow(
         placeButton(if (recording) "Pause" else "Record") {
             if (recording) pipeline.pauseRecording() else pipeline.startRecording()
         }
+        // Replays the newest window the plots show, i.e. what the sliders and
+        // the source produced up to now; nothing recorded, nothing to play.
+        placeButton("Replay") { pipeline.replayWindow(windowSamples(windowMillis)) }
         placeCheck("monitor", monitoring) { pipeline.monitoring = monitoring[0] }
         placeSlider("window", 240f) {
             if (ImGui.sliderInt("window", sliderValue, MIN_WINDOW_MILLIS, MAX_WINDOW_MILLIS, "%d ms")) {
@@ -227,6 +230,7 @@ class WaveformWindow(
     private fun transportState() {
         ImGui.text(
             when {
+                pipeline.replaying -> "replaying the window"
                 pipeline.recording && pipeline.playing -> "recording, playing"
                 pipeline.recording -> "recording"
                 pipeline.processedFrames > 0L -> "paused"

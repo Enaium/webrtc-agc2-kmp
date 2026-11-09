@@ -37,6 +37,9 @@ class WaveformScope(val capacity: Int) {
 
     private var size = 0
 
+    /** Samples the window currently holds: it is only full once the capture has run that long. */
+    val filled: Int get() = size
+
     /** Drops every sample, so the plots start from a blank window again. */
     fun clear() {
         writeIndex = 0

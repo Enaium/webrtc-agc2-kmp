@@ -136,6 +136,8 @@ private const val AGC_SCALE = 32_768f
  * The playback differs from a recorder's transport on purpose: AGC2 is a
  * continuous gain stage rather than a gate, so what it produces is played as it
  * is produced ([monitoring]) instead of being replayed from a recorded window.
+ * [replayWindow] is the recorder-like counterpart: it plays the newest part of
+ * the capture back once, which is what the button in the transport does.
  * Record/pause still drives the capture device, which is what releases the
  * microphone.
  *
@@ -407,6 +409,23 @@ class Agc2Pipeline(
 
     private var queuedSamples = 0
 
+    /**
+     * Playback of a recorded window, kept apart from [queue]: a window can hold
+     * ten seconds, far more than the queue that smooths the live monitoring.
+     * [replayRead] is the next sample to write, [replayLength] how many the
+     * window held when the button was pressed, and [replaying] pauses the live
+     * queue until the recording has been played back.
+     */
+    private val replay = FloatArray(windowSamples)
+
+    private var replayRead = 0
+
+    private var replayLength = 0
+
+    /** `true` while the recorded window is being played back. */
+    var replaying: Boolean = false
+        private set
+
     /** Input volume of the previous frame, which is what `inputVolumeChanged` reports. */
     private var lastAppliedInputVolume = -1
 
@@ -456,6 +475,7 @@ class Agc2Pipeline(
      */
     fun startRecording() {
         if (closed || recording) return
+        cancelReplay()
         recording = true
         processedFrames = 0
         droppedPlaybackFrames = 0
@@ -485,6 +505,35 @@ class Agc2Pipeline(
         captureWanted = false
         closeCapture()
         report("paused after $processedFrames frames")
+    }
+
+    /**
+     * Plays the newest [samples] of the capture - the part the plots show -
+     * through the playback device, pausing live monitoring until it ends.
+     *
+     * Replaying the capture rather than the AGC2 output keeps the controller out
+     * of it: feeding a recorded window back through it would move the adaptive
+     * gain the plots explain, while the capture is exactly what was recorded.
+     */
+    fun replayWindow(samples: Int) {
+        if (closed) return
+        // Only what the capture holds: a window that has not filled yet would
+        // otherwise replay the silence snapshot pads the plot with.
+        val count = minOf(samples, inputScope.filled, replay.size)
+        if (count <= 0) return
+        val recorded = FloatArray(count)
+        inputScope.snapshot(recorded)
+        recorded.copyInto(replay)
+        replayRead = 0
+        replayLength = count
+        replaying = true
+        // Frames queued before the click would play over the replay, and frames
+        // the pump produces during it are skipped (see [queuePlayback]).
+        queuedSamples = 0
+        queueRead = 0
+        // The replay needs the output even when monitoring is off.
+        outputWanted = true
+        report("replaying ${count / FRAME_SAMPLES} frames")
     }
 
     /**
@@ -776,6 +825,7 @@ class Agc2Pipeline(
         }
         queuedSamples = 0
         queueRead = 0
+        cancelReplay()
     }
 
     /**
@@ -899,6 +949,9 @@ class Agc2Pipeline(
 
     /** Queues the last frame, scaled by the playback level, for the output device. */
     private fun queuePlayback() {
+        // Live frames are not mixed into a replay: they would talk over the
+        // recording and leave a stale backlog for when it ends.
+        if (replaying) return
         if (queuedSamples + FRAME_SAMPLES > queue.size) {
             // The device is not consuming: dropping is better than letting the
             // plots and the playback drift apart.
@@ -913,8 +966,20 @@ class Agc2Pipeline(
         queuedSamples += FRAME_SAMPLES
     }
 
-    /** Hands as much of the queue to the playback device as it takes right now. */
+    /** Hands as much of the queue - or of the recording being replayed - to the device as it takes. */
     private fun pumpPlayback() {
+        if (replaying) {
+            if (playbackError != null) {
+                // The output could not be opened, so nothing will play this.
+                cancelReplay()
+                if (!monitoring) outputWanted = false
+                report("replay cancelled: $playbackError")
+                return
+            }
+            val stream = output ?: takeOutput()?.also { output = it } ?: return
+            pumpReplay(stream)
+            return
+        }
         if (!monitoring || queuedSamples == 0) return
         val stream = output ?: takeOutput()?.also { output = it } ?: return
         while (queuedSamples > 0) {
@@ -928,6 +993,29 @@ class Agc2Pipeline(
             queueRead = (queueRead + written) % queue.size
             queuedSamples -= written
         }
+    }
+
+    /** Writes the recording; a device that takes none of it is retried on the next pump. */
+    private fun pumpReplay(stream: AudioOutput) {
+        while (replayRead < replayLength) {
+            val count = minOf(playbackChunk.size, replayLength - replayRead)
+            replay.copyInto(playbackChunk, 0, replayRead, replayRead + count)
+            playbackBuffer.putFloats(playbackChunk, count)
+            val written = stream.writeNonBlocking(playbackBuffer)
+            if (written <= 0) return
+            replayRead += written
+        }
+        cancelReplay()
+        report("replay finished")
+        // Monitoring off: the device was only open for the replay.
+        if (!monitoring) outputWanted = false
+    }
+
+    /** Drops whatever is left of a replay. */
+    private fun cancelReplay() {
+        replaying = false
+        replayRead = 0
+        replayLength = 0
     }
 
     /**
