@@ -137,7 +137,8 @@ private const val AGC_SCALE = 32_768f
  * continuous gain stage rather than a gate, so what it produces is played as it
  * is produced ([monitoring]) instead of being replayed from a recorded window.
  * [replayWindow] is the recorder-like counterpart: it plays the newest part of
- * the capture back once, which is what the button in the transport does.
+ * the gain controlled output back once, which is what the button in the
+ * transport does.
  * Record/pause still drives the capture device, which is what releases the
  * microphone.
  *
@@ -508,22 +509,27 @@ class Agc2Pipeline(
     }
 
     /**
-     * Plays the newest [samples] of the capture - the part the plots show -
-     * through the playback device, pausing live monitoring until it ends.
+     * Plays the newest [samples] of the gain controlled output - the part the
+     * output plot shows, i.e. exactly what monitoring played - through the
+     * playback device, pausing live monitoring until it ends.
      *
-     * Replaying the capture rather than the AGC2 output keeps the controller out
-     * of it: feeding a recorded window back through it would move the adaptive
-     * gain the plots explain, while the capture is exactly what was recorded.
+     * The output rather than the capture: AGC2's gain is applied to the capture
+     * before it reaches the device, and a recording of the raw capture would
+     * play back at the capture level, which is quiet enough to sound like
+     * silence next to the monitored signal.
      */
     fun replayWindow(samples: Int) {
         if (closed) return
-        // Only what the capture holds: a window that has not filled yet would
+        // Only what the window holds: a window that has not filled yet would
         // otherwise replay the silence snapshot pads the plot with.
-        val count = minOf(samples, inputScope.filled, replay.size)
+        val count = minOf(samples, outputScope.filled, replay.size)
         if (count <= 0) return
         val recorded = FloatArray(count)
-        inputScope.snapshot(recorded)
-        recorded.copyInto(replay)
+        outputScope.snapshot(recorded)
+        // Same level monitoring applies, so the replay is as loud as what was
+        // just heard.
+        val gain = dbfsToAmplitude(playbackLevelDb)
+        for (i in 0 until count) replay[i] = recorded[i] * gain
         replayRead = 0
         replayLength = count
         replaying = true
