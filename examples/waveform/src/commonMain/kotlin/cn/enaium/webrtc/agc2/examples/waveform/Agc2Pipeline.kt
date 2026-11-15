@@ -153,37 +153,37 @@ class Agc2Pipeline(
      * longest window its slider allows and lets the UI show a shorter part.
      */
     windowSamples: Int,
-) : AutoCloseable {
+) : WaveformPipeline, AutoCloseable {
 
     /** Frames the metric histories hold: one value per frame. */
     private val historyFrames: Int = maxOf(windowSamples / FRAME_SAMPLES, 1)
 
     /** Capture samples as AGC2 receives them, in `-1..1`. */
-    val inputScope = WaveformScope(windowSamples)
+    override val inputScope = WaveformScope(windowSamples)
 
     /** Gain controlled samples, aligned with [inputScope]. */
-    val outputScope = WaveformScope(windowSamples)
+    override val outputScope = WaveformScope(windowSamples)
 
     /** Input level per frame, in dBFS. */
-    val inputHistory = HistoryRing(historyFrames)
+    override val inputHistory = HistoryRing(historyFrames)
 
     /** Output level per frame, in dBFS. */
-    val outputHistory = HistoryRing(historyFrames)
+    override val outputHistory = HistoryRing(historyFrames)
 
     /** Gain applied per frame, in dB: the output level minus the input level. */
-    val gainHistory = HistoryRing(historyFrames)
+    override val gainHistory = HistoryRing(historyFrames)
 
     /** Format requested from the devices: 48 kHz mono, the format AGC2 is fed. */
-    val format: AudioFormat = AudioFormat.SPEECH
+    override val format: AudioFormat = AudioFormat.SPEECH
 
     /** Samples per AGC2 frame (480 = 10 ms at 48 kHz). */
-    val frameSize: Int = FRAME_SAMPLES
+    override val frameSize: Int = FRAME_SAMPLES
 
     /** Backend serving the devices, e.g. `"Core Audio"`. */
-    val systemName: String
+    override val systemName: String
 
     /** Whether the capture goes through AGC2; off plays the raw capture back. */
-    var agcEnabled: Boolean = true
+    override var agcEnabled: Boolean = true
 
     /**
      * Where the capture frame comes from. [SignalSource.SPEECH] by default: the
@@ -193,7 +193,7 @@ class Agc2Pipeline(
      * Switching to a source that needs the microphone opens the capture device,
      * switching away from it releases the device again.
      */
-    var signalSource: SignalSource = SignalSource.SPEECH
+    override var signalSource: SignalSource = SignalSource.SPEECH
         set(value) {
             if (field == value) return
             field = value
@@ -210,16 +210,16 @@ class Agc2Pipeline(
      * Level of the synthesised source in dBFS. The captured source is not
      * scaled: the microphone's own level is what AGC2 has to work with.
      */
-    var sourceLevelDb: Float = DEFAULT_SOURCE_DB
+    override var sourceLevelDb: Float = DEFAULT_SOURCE_DB
 
     /** Level the AGC2 output is played back with, in dBFS. */
-    var playbackLevelDb: Float = DEFAULT_PLAYBACK_DB
+    override var playbackLevelDb: Float = DEFAULT_PLAYBACK_DB
 
     /**
      * Whether what AGC2 produced is played back. Turning it off releases the
      * playback device and drops whatever was queued.
      */
-    var monitoring: Boolean = true
+    override var monitoring: Boolean = true
         set(value) {
             if (field == value) return
             field = value
@@ -228,7 +228,7 @@ class Agc2Pipeline(
         }
 
     /** Gain of the fixed digital controller, in dB. Live: [Agc2GainController.setFixedGainDb]. */
-    var fixedDigitalGainDb: Float = 0f
+    override var fixedDigitalGainDb: Float = 0f
 
     /**
      * Input volume the caller applies on the audio HAL, in `0..255`.
@@ -240,82 +240,82 @@ class Agc2Pipeline(
      * starts from. When [autoApplyRecommendedVolume] is on, the pump writes the
      * last recommendation back into it.
      */
-    var appliedInputVolume: Int = 255
+    override var appliedInputVolume: Int = 255
 
     /** Whether the pump applies [Agc2GainController.recommendedInputVolume] itself. */
-    var autoApplyRecommendedVolume: Boolean = false
+    override var autoApplyRecommendedVolume: Boolean = false
 
     /**
      * Whether the adaptive digital controller runs. AGC2 reads this when the
      * controller is built, so the setter builds a new one (see
      * [setAdaptiveDigitalEnabled]).
      */
-    var adaptiveDigitalEnabled: Boolean = true
+    override var adaptiveDigitalEnabled: Boolean = true
         private set
 
     /** Whether the input volume controller runs. Reaches AGC2 the same way as [adaptiveDigitalEnabled]. */
-    var inputVolumeControllerEnabled: Boolean = true
+    override var inputVolumeControllerEnabled: Boolean = true
         private set
 
     /** Whether AGC2's own RNN VAD produces the speech probability. Reaches AGC2 like [adaptiveDigitalEnabled]. */
-    var useInternalVad: Boolean = true
+    override var useInternalVad: Boolean = true
         private set
 
     /** `true` between [startRecording] and [pauseRecording]. */
-    var recording: Boolean = false
+    override var recording: Boolean = false
         private set
 
     /** Whether the capture device is open, i.e. the microphone is in use. */
     val captureOpen: Boolean get() = input != null
 
     /** `true` while AGC2 output is queued for the playback device. */
-    val playing: Boolean get() = output != null && queuedSamples > 0
+    override val playing: Boolean get() = output != null && queuedSamples > 0
 
     /** Human readable name of the capture endpoint, once one is open. */
-    var captureDeviceName: String = "system default"
+    override var captureDeviceName: String = "system default"
         private set
 
     /** Human readable name of the playback endpoint, once one is open. */
-    var playbackDeviceName: String = "system default"
+    override var playbackDeviceName: String = "system default"
         private set
 
     /** Why no capture stream is open, or `null` while one is. */
-    var captureError: String? = null
+    override var captureError: String? = null
         private set
 
     /** Why no playback stream is open, or `null` while there is none. */
-    var playbackError: String? = null
+    override var playbackError: String? = null
         private set
 
     /** Input level of the last processed frame, in dBFS; `-inf` for silence. */
-    var inputDbfs: Float = Float.NEGATIVE_INFINITY
+    override var inputDbfs: Float = Float.NEGATIVE_INFINITY
         private set
 
     /** Output level of the last processed frame, in dBFS; `-inf` for silence. */
-    var outputDbfs: Float = Float.NEGATIVE_INFINITY
+    override var outputDbfs: Float = Float.NEGATIVE_INFINITY
         private set
 
     /** Gain the last processed frame was played back with, in dB. */
-    var appliedGainDb: Float = 0f
+    override var appliedGainDb: Float = 0f
         private set
 
     /** Latest recommended input volume, or `null` when there is none. */
-    var recommendedInputVolume: Int? = null
+    override var recommendedInputVolume: Int? = null
         private set
 
     /** AGC2 frames processed since the last [startRecording]. */
-    var processedFrames: Long = 0L
+    override var processedFrames: Long = 0L
         private set
 
     /** Frames the playback queue could not take, and frames AGC2 produced but the device refused. */
-    var droppedPlaybackFrames: Long = 0L
+    override var droppedPlaybackFrames: Long = 0L
         private set
 
     /**
      * Captured frames the pump dropped because it was behind: a live monitor
      * plays the newest audio, so the rest is skipped rather than processed late.
      */
-    var droppedCaptureFrames: Long = 0L
+    override var droppedCaptureFrames: Long = 0L
         private set
 
     private val system: AudioSystem = audioSystem()
@@ -424,7 +424,7 @@ class Agc2Pipeline(
     private var replayLength = 0
 
     /** `true` while the recorded window is being played back. */
-    var replaying: Boolean = false
+    override var replaying: Boolean = false
         private set
 
     /** Input volume of the previous frame, which is what `inputVolumeChanged` reports. */
@@ -474,39 +474,35 @@ class Agc2Pipeline(
      * microphone is opened when the source needs it, and [pump] starts moving
      * audio.
      */
-    fun startRecording() {
-        if (closed || recording) return
-        cancelReplay()
-        recording = true
-        processedFrames = 0
-        droppedPlaybackFrames = 0
-        droppedCaptureFrames = 0
-        staged = 0
-        lastAppliedInputVolume = -1
-        nextGeneratedFrame = 0uL
-        inputScope.clear()
-        outputScope.clear()
-        inputHistory.clear()
-        outputHistory.clear()
-        gainHistory.clear()
-        // Asking for the devices is all the transport does: the device thread
-        // opens them, because that call can block.
-        captureWanted = signalSource.needsCapture
-        outputWanted = monitoring
-        report("recording: ${signalSource.label}")
-    }
+    override fun startRecording() { if (closed || recording) return
+    cancelReplay()
+    recording = true
+    processedFrames = 0
+    droppedPlaybackFrames = 0
+    droppedCaptureFrames = 0
+    staged = 0
+    lastAppliedInputVolume = -1
+    nextGeneratedFrame = 0uL
+    inputScope.clear()
+    outputScope.clear()
+    inputHistory.clear()
+    outputHistory.clear()
+    gainHistory.clear()
+    // Asking for the devices is all the transport does: the device thread
+    // opens them, because that call can block.
+    captureWanted = signalSource.needsCapture
+    outputWanted = monitoring
+    report("recording: ${signalSource.label}") }
 
     /**
      * Stops moving audio and releases the capture device - which is what hands
      * the microphone back to the system. The plots keep what was recorded.
      */
-    fun pauseRecording() {
-        if (!recording) return
-        recording = false
-        captureWanted = false
-        closeCapture()
-        report("paused after $processedFrames frames")
-    }
+    override fun pauseRecording() { if (!recording) return
+    recording = false
+    captureWanted = false
+    closeCapture()
+    report("paused after $processedFrames frames") }
 
     /**
      * Plays the newest [samples] of the gain controlled output - the part the
@@ -518,77 +514,67 @@ class Agc2Pipeline(
      * play back at the capture level, which is quiet enough to sound like
      * silence next to the monitored signal.
      */
-    fun replayWindow(samples: Int) {
-        if (closed) return
-        // Only what the window holds: a window that has not filled yet would
-        // otherwise replay the silence snapshot pads the plot with.
-        val count = minOf(samples, outputScope.filled, replay.size)
-        if (count <= 0) return
-        val recorded = FloatArray(count)
-        outputScope.snapshot(recorded)
-        // Same level monitoring applies, so the replay is as loud as what was
-        // just heard.
-        val gain = dbfsToAmplitude(playbackLevelDb)
-        for (i in 0 until count) replay[i] = recorded[i] * gain
-        replayRead = 0
-        replayLength = count
-        replaying = true
-        // Frames queued before the click would play over the replay, and frames
-        // the pump produces during it are skipped (see [queuePlayback]).
-        queuedSamples = 0
-        queueRead = 0
-        // The replay needs the output even when monitoring is off.
-        outputWanted = true
-        report("replaying ${count / FRAME_SAMPLES} frames")
-    }
+    override fun replayWindow(samples: Int) { if (closed) return
+    // Only what the window holds: a window that has not filled yet would
+    // otherwise replay the silence snapshot pads the plot with.
+    val count = minOf(samples, outputScope.filled, replay.size)
+    if (count <= 0) return
+    val recorded = FloatArray(count)
+    outputScope.snapshot(recorded)
+    // Same level monitoring applies, so the replay is as loud as what was
+    // just heard.
+    val gain = dbfsToAmplitude(playbackLevelDb)
+    for (i in 0 until count) replay[i] = recorded[i] * gain
+    replayRead = 0
+    replayLength = count
+    replaying = true
+    // Frames queued before the click would play over the replay, and frames
+    // the pump produces during it are skipped (see [queuePlayback]).
+    queuedSamples = 0
+    queueRead = 0
+    // The replay needs the output even when monitoring is off.
+    outputWanted = true
+    report("replaying ${count / FRAME_SAMPLES} frames") }
 
     /**
      * Enables or disables the adaptive digital controller. AGC2 reads it when
      * the controller is built, so this builds a new one.
      */
-    fun setAdaptiveDigitalEnabled(enabled: Boolean) {
-        if (adaptiveDigitalEnabled == enabled) return
-        adaptiveDigitalEnabled = enabled
-        rebuildController()
-    }
+    override fun setAdaptiveDigitalEnabled(enabled: Boolean) { if (adaptiveDigitalEnabled == enabled) return
+    adaptiveDigitalEnabled = enabled
+    rebuildController() }
 
     /**
      * Enables or disables the input volume controller, which is what produces
      * [recommendedInputVolume]. AGC2 reads it when the controller is built.
      */
-    fun setInputVolumeControllerEnabled(enabled: Boolean) {
-        if (inputVolumeControllerEnabled == enabled) return
-        inputVolumeControllerEnabled = enabled
-        rebuildController()
-    }
+    override fun setInputVolumeControllerEnabled(enabled: Boolean) { if (inputVolumeControllerEnabled == enabled) return
+    inputVolumeControllerEnabled = enabled
+    rebuildController() }
 
     /** Switches AGC2's own VAD on or off. It is a constructor argument, so this builds a new controller. */
-    fun setUseInternalVad(enabled: Boolean) {
-        if (useInternalVad == enabled) return
-        useInternalVad = enabled
-        rebuildController()
-    }
+    override fun setUseInternalVad(enabled: Boolean) { if (useInternalVad == enabled) return
+    useInternalVad = enabled
+    rebuildController() }
 
     /**
      * Moves audio: reads everything the capture device has buffered through
      * AGC2, queues what comes out and hands as much of it to the playback
      * device as it takes. Called once per UI frame.
      */
-    fun pump() {
-        if (closed) return
-        if (recording && signalSource.needsCapture) {
-            // The device thread opens the microphone; until it has, the pump
-            // simply has nothing to read and the window keeps drawing.
-            val stream = input ?: takeCapture()
-            if (stream != null) {
-                input = stream
-                drainCapture(stream)
-            }
-        } else if (recording && signalSource.isGenerated) {
-            generate()
+    override fun pump() { if (closed) return
+    if (recording && signalSource.needsCapture) {
+        // The device thread opens the microphone; until it has, the pump
+        // simply has nothing to read and the window keeps drawing.
+        val stream = input ?: takeCapture()
+        if (stream != null) {
+            input = stream
+            drainCapture(stream)
         }
-        pumpPlayback()
+    } else if (recording && signalSource.isGenerated) {
+        generate()
     }
+    pumpPlayback() }
 
     /** Releases the devices and AGC2. */
     override fun close() {

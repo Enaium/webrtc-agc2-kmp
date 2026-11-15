@@ -79,7 +79,7 @@ private const val MAX_LEVEL_DB = 30f
  * the plots show the newest part of them.
  */
 class WaveformWindow(
-    private val pipeline: Agc2Pipeline,
+    private val pipeline: WaveformPipeline,
     initialWindowMillis: Int = DEFAULT_WINDOW_MILLIS,
 ) {
 
