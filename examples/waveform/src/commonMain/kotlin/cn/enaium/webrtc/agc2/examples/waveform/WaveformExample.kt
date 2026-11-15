@@ -50,24 +50,29 @@ internal expect val windowStartsFullscreen: Boolean
  * [frames] bounds the run, which is what the automated (headless) runs use.
  * Returns `false` when no window could be opened.
  */
-fun runWaveformExample(frames: Int = Int.MAX_VALUE): Boolean {
+fun runWaveformExample(
+    pipeline: WaveformPipeline,
+    frames: Int = Int.MAX_VALUE,
+    driver: FrameDriver? = null,
+): Boolean {
     println("webrtc-agc2-kmp waveform example (frames=$frames)")
-    val displayed = Agc2Pipeline(windowSamples(MAX_WINDOW_MILLIS)).use { pipeline ->
-        val window = WaveformWindow(pipeline)
-        // Recording starts on its own: the default source is synthesised, so
-        // the example shows the gain moving without anyone pressing anything.
-        // The transport in the UI pauses and resumes it.
-        pipeline.startRecording()
-        val rendered = ImGuiSdlApp.run("webrtc-agc2-kmp waveform", frames) {
-            // Moves audio every frame: reads what the devices captured and
-            // writes what AGC2 produced, both without blocking. Opening and
-            // closing the devices itself happens on the pipeline's device
-            // thread, so a slow device cannot hold up the window.
-            pipeline.pump()
-            window.draw()
-        }
+    val window = WaveformWindow(pipeline)
+    // Recording starts on its own: the default source is synthesised, so
+    // the example shows the gain moving without anyone pressing anything.
+    // The transport in the UI pauses and resumes it.
+    pipeline.startRecording()
+    val rendered = ImGuiSdlApp.run("webrtc-agc2-kmp waveform", frames, driver) {
+        // Moves audio every frame: reads what the devices captured and
+        // writes what the pipeline produced, both without blocking. Opening
+        // and closing the devices itself happens on the pipeline's device
+        // thread, so a slow device cannot hold up the window.
+        pipeline.pump()
+        window.draw()
+    }
+    if (driver == null) {
         // What a headless run has to show for itself: how much audio was
-        // processed and what AGC2 made of it.
+        // processed and what the pipeline made of it. A browser driver
+        // returns as soon as the loop is scheduled, so this would be zeros.
         val droppedCapture = pipeline.droppedCaptureFrames
         val droppedPlayback = pipeline.droppedPlaybackFrames
         println(
@@ -79,8 +84,7 @@ fun runWaveformExample(frames: Int = Int.MAX_VALUE): Boolean {
                 "gain ${fixed(pipeline.appliedGainDb.toDouble(), 1)} dB, " +
                 "recommended input volume ${pipeline.recommendedInputVolume ?: "none"}",
         )
-        rendered
+        println(if (rendered) "done" else "aborted")
     }
-    println(if (displayed) "done" else "aborted")
-    return displayed
+    return rendered
 }

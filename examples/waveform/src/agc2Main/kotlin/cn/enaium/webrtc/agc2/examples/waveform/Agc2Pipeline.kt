@@ -45,15 +45,6 @@ import kotlin.concurrent.Volatile
 import kotlin.math.log10
 import kotlin.math.sqrt
 
-/** AGC2 processes capture audio at 48 kHz mono. */
-internal const val SAMPLE_RATE = 48_000
-
-/** Samples per AGC2 frame: 10 ms at 48 kHz, the size the buffers are built for. */
-internal const val FRAME_SAMPLES = SAMPLE_RATE / 100
-
-/** Milliseconds one frame covers, the pace a synthesised source is generated at. */
-internal const val FRAME_MILLIS = 10
-
 /** Channels the example captures, processes and plays. */
 private const val CHANNELS = 1
 

@@ -33,7 +33,7 @@ import cn.enaium.audio.AudioFormat
  * wasm/js build) reuse the same UI: it supplies the scopes, the histories and
  * the transport, and the plots cannot tell the difference.
  */
-interface WaveformPipeline {
+interface WaveformPipeline : AutoCloseable {
 
     /** Capture samples in `-1..1`, the input plot. */
     val inputScope: WaveformScope

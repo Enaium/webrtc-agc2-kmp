@@ -25,6 +25,15 @@ package cn.enaium.webrtc.agc2.examples.waveform
 import kotlin.math.pow
 import kotlin.random.Random
 
+/** Sample rate every audio path in the example runs at, in Hz. */
+internal const val SAMPLE_RATE = 48_000
+
+/** Samples per processing frame: 10 ms of audio. */
+internal const val FRAME_SAMPLES = SAMPLE_RATE / 100
+
+/** Milliseconds of audio one frame covers. */
+internal const val FRAME_MILLIS = 10
+
 /**
  * Where the capture frame comes from: what AGC2 processes.
  *

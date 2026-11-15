@@ -43,7 +43,7 @@ import kotlinx.cinterop.CPointerVar
  */
 @CName("SDL_main")
 fun sdlMain(argc: Int, argv: CPointer<CPointerVar<ByteVar>>?): Int {
-    runWaveformExample()
+    runAgc2WaveformExample()
     SDL.quit()
     return 0
 }

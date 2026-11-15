@@ -22,7 +22,7 @@
 
 @file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 
-import cn.enaium.webrtc.agc2.examples.waveform.runWaveformExample
+import cn.enaium.webrtc.agc2.examples.waveform.runAgc2WaveformExample
 import kotlinx.cinterop.toKString
 import platform.posix.getenv
 import kotlin.system.exitProcess
@@ -39,7 +39,7 @@ import kotlin.system.exitProcess
  */
 fun main() {
     val frames = getenv("AGC2_KMP_FRAMES")?.toKString()?.toIntOrNull() ?: Int.MAX_VALUE
-    if (!runWaveformExample(frames)) {
+    if (!runAgc2WaveformExample(frames)) {
         exitProcess(1)
     }
 }

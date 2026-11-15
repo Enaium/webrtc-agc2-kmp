@@ -59,7 +59,7 @@ private const val RELAUNCH_MARKER = "AGC2_KMP_WAVEFORM_RELAUNCHED"
 
 /** JVM entry point: `./gradlew :examples:waveform:jvmRun`. */
 fun main(args: Array<String>) {
-    if (runWaveformExample(parseFrames(args))) return
+    if (runAgc2WaveformExample(parseFrames(args))) return
     // No window could be opened. On macOS that is what happens when the JVM was
     // not started on the process' first thread, which SDL needs to create one -
     // `./gradlew :examples:waveform:jvmRun` passes -XstartOnFirstThread, an IDE

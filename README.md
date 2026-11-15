@@ -191,7 +191,7 @@ The instrumentation test synthesizes its own signals (the repository ships no au
 
 ### [`examples/waveform`](examples/waveform/) — live gain visualization
 
-A Kotlin Multiplatform app (JVM desktop, macOS/Linux/Windows native executables and Android via [`examples/waveform/android`](examples/waveform/android/)) that draws what AGC2 does with Dear ImGui + ImPlot in an SDL3 window:
+A Kotlin Multiplatform app (JVM desktop, macOS/Linux/Windows native executables, Android via [`examples/waveform/android`](examples/waveform/android/) and a browser build) that draws what AGC2 does with Dear ImGui + ImPlot in an SDL3 window:
 
 - **Two waveform traces** — the capture AGC2 was handed and what came out of it, over a 100 ms–10 s sliding window
 - **A level history plot** — input and output RMS in dBFS and the gain AGC2 applied, frame by frame, with the recommended input volume as a readout
@@ -201,10 +201,13 @@ A Kotlin Multiplatform app (JVM desktop, macOS/Linux/Windows native executables 
 - **AGC2 controls** — bypass, adaptive digital, input volume controller, internal VAD (each rebuilding the controller), fixed gain (live), applied input volume (0–255) with auto-apply, source level and playback level
 - **Audio driven from the render loop** — the window pulls the capture device with non-blocking reads, runs every 10 ms frame through AGC2 and pushes what comes out to the playback device with non-blocking writes; the devices buffer ten frames, far more than one UI frame, so a slow frame cannot drop audio. A pump processes at most four frames and drops the older backlog (the *details* section counts it), which is what keeps one slow frame from turning into a slower one. Opening and closing a device is the one call in that path that can block (a microphone permission prompt, a device that is still starting, a sample rate to negotiate), so it runs on a thread of its own — switching to *Microphone* never waits for the device
 - **Audible result** — the AGC2 output is played through the output device, so the gain is not just visible
+- **Browser build** — the same UI source compiles to `wasmJs` (SDL3, Dear ImGui and the Web Audio backend are all published as wasm): `:examples:waveform:copyWasmAssets` assembles `build/browserApp/`, a static page serving the Kotlin/Wasm executable next to the `@enaium/*` npm glue packages. AGC2 has no wasm target, so there the pipeline plays the capture through at the fixed gain instead: the browser build's adaptive controls report themselves off rather than pretending to run. Web Audio needs a user gesture, so the page starts silent until the canvas is clicked
 
 ```bash
 ./gradlew :examples:waveform:jvmRun                  # desktop JVM
 ./gradlew :examples:waveform:android:assembleDebug   # Android APK
+./gradlew :examples:waveform:copyWasmAssets          # browser build (build/browserApp)
+python3 -m http.server -d examples/waveform/build/browserApp 8000   # then open http://127.0.0.1:8000/
 ```
 
 Native executables (`./examples/waveform/build/bin/<target>/<mode>Executable/waveform.kexe`) take `AGC2_KMP_FRAMES` to bound a headless run; the JVM entry takes `--frames N`. A headless run (SDL's dummy video driver, no audio devices) still processes audio: the synthetic source paces itself at 10 ms per frame, and playback that cannot be delivered is dropped and counted instead of holding up the capture.
