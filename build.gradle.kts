@@ -96,8 +96,8 @@ val PINNED_ANDROID_NDK_VERSION = "27.0.12077973"
 val androidNdkSysrootPath: String? = androidNdkSysroot()?.absolutePath
 
 allprojects {
-    group = "cn.enaium.webrtc.agc2"
-    version = "1.0.1-rolling.pRJneQThJ"
+    group = "cn.enaium.webrtc"
+    version = "1.0.2-rolling.pRJneQThJ"
 
     // CMake-driven modules take this instead of looking `cmake` up on PATH.
     extra["cmakeExecutable"] = cmakeExecutable

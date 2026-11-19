@@ -31,6 +31,10 @@
  *    the libstdc++ headers - turns on; rtc_base/strings/string_to_number.cc is
  *    the caller. They forward to the C99 entry points those callers were
  *    written against, which differ from C23 only in not accepting "0b".
+ *
+ *  - __isoc23_sscanf (glibc 2.38) is the same redirect for sscanf, which the
+ *    same C23 mode turns on; the parsed formats here are plain C99, so
+ *    forwarding to the C99 entry point is exact.
  */
 #include <new>
 
@@ -53,6 +57,7 @@ __attribute__((__noreturn__)) void __throw_bad_array_new_length() {
 #if defined(__linux__) && !defined(__ANDROID__)
 
 #include <stdlib.h>
+#include <stdarg.h>
 
 #if defined(__GLIBC__)
 
@@ -73,6 +78,8 @@ extern "C" long long
 webrtc_agc2_strtoll(const char*, char**, int) __asm__("strtoll");
 extern "C" unsigned long long
 webrtc_agc2_strtoull(const char*, char**, int) __asm__("strtoull");
+extern "C" int
+webrtc_agc2_vsscanf(const char*, const char*, va_list) __asm__("vsscanf");
 
 extern "C" __attribute__((weak)) long long
 __isoc23_strtoll(const char* nptr, char** endptr, int base) {
@@ -82,6 +89,15 @@ __isoc23_strtoll(const char* nptr, char** endptr, int base) {
 extern "C" __attribute__((weak)) unsigned long long
 __isoc23_strtoull(const char* nptr, char** endptr, int base) {
   return webrtc_agc2_strtoull(nptr, endptr, base);
+}
+
+extern "C" __attribute__((weak)) int
+__isoc23_sscanf(const char* input, const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  const int result = webrtc_agc2_vsscanf(input, format, args);
+  va_end(args);
+  return result;
 }
 
 #endif /* __GLIBC_PREREQ(2, 38) */

@@ -2,7 +2,7 @@
 
 ![](https://img.cdn1.vip/i/6aaa7de200508_1789558242.webp)
 
-[![Maven Central](https://img.shields.io/maven-central/v/cn.enaium.webrtc.agc2/webrtc-agc2-kmp?label=Maven%20Central)](https://central.sonatype.com/artifact/cn.enaium.webrtc.agc2/webrtc-agc2-kmp)
+[![Maven Central](https://img.shields.io/maven-central/v/cn.enaium.webrtc/webrtc-agc2-kmp?label=Maven%20Central)](https://central.sonatype.com/artifact/cn.enaium.webrtc/webrtc-agc2-kmp)
 [![License](https://img.shields.io/github/license/Enaium/webrtc-agc2-kmp)](https://github.com/Enaium/webrtc-agc2-kmp/blob/main/LICENSE)
 [![GitHub Actions](https://img.shields.io/github/actions/workflow/status/Enaium/webrtc-agc2-kmp/test.yml?label=test)](https://github.com/Enaium/webrtc-agc2-kmp/actions/workflows/test.yml)
 [![GitHub Repo stars](https://img.shields.io/github/stars/Enaium/webrtc-agc2-kmp?style=social)](https://github.com/Enaium/webrtc-agc2-kmp)
@@ -37,7 +37,7 @@ An RNN voice activity detector (`rnn_vad/`) inside the module drives the adaptiv
 **Kotlin Multiplatform / Android:**
 
 ```kotlin
-implementation("cn.enaium.webrtc.agc2:webrtc-agc2-kmp:1.0.1")
+implementation("cn.enaium.webrtc:webrtc-agc2-kmp:1.0.2")
 ```
 
 **Browser (js / wasmJs):** the klib comes from the same Maven coordinate, but the
