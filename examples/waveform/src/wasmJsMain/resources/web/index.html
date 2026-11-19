@@ -15,7 +15,8 @@
         "imports": {
             "@enaium/sdl-kmp": "./node_modules/@enaium/sdl-kmp/sdl_kmp_glue.js",
             "@enaium/imgui-kmp": "./node_modules/@enaium/imgui-kmp/imgui_kmp_glue.js",
-            "@enaium/audio-io-kmp": "./node_modules/@enaium/audio-io-kmp/audio-io-kmp-web.js"
+            "@enaium/audio-io-kmp": "./node_modules/@enaium/audio-io-kmp/audio-io-kmp-web.js",
+            "@enaium/webrtc-agc2-kmp": "./node_modules/@enaium/webrtc-agc2-kmp/agc2_kmp_glue.js"
         }
     }
 </script>
@@ -28,6 +29,9 @@
     // audio-io-kmp's Web Audio backend is a plain script: it publishes the
     // audioIo_* globals the Kotlin wasm side calls.
     import '@enaium/audio-io-kmp';
+    // AGC2 compiled to wasm: the Kotlin bindings call the functions the glue
+    // publishes, so the module has to be up before the Kotlin one.
+    import { initAgc2Kmp } from '@enaium/webrtc-agc2-kmp';
 
     const canvas = document.getElementById('canvas');
 
@@ -41,6 +45,7 @@
 
     await initSdlKmp({ canvas });
     await initImguiKmp();
+    await initAgc2Kmp();
 
     // The Kotlin/Wasm runtime invokes main() when the module is imported.
     await import('./webrtc-agc2-kmp-examples-waveform.mjs');

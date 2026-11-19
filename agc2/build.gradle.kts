@@ -141,6 +141,20 @@ kotlin {
     androidNativeX64()
     androidNativeX86()
 
+    // ==================== Web (js + wasmJs) ====================
+    // Kotlin/Wasm and Kotlin/JS have no cinterop, so both targets share one
+    // implementation (src/webMain) that drives the same C API compiled to
+    // wasm by Emscripten. The module ships as the @enaium/webrtc-agc2-kmp npm
+    // package (see the wasm tasks at the end of this file); the page has to
+    // initialize it before the Kotlin code runs.
+    js {
+        browser()
+    }
+
+    wasmJs {
+        browser()
+    }
+
     // ==================== cinterop for all native targets ====================
     targets.withType<KotlinNativeTarget> {
         val targetName = this.name
@@ -184,6 +198,15 @@ kotlin {
                 implementation(libs.kotlin.test)
             }
         }
+
+        // Browser implementation shared by js and wasmJs: the external
+        // declarations, the Emscripten heap access and the C API wrappers are
+        // identical for both, only the module loading glue differs at runtime.
+        val webMain by creating {
+            dependsOn(getByName("commonMain"))
+        }
+        getByName("jsMain").dependsOn(webMain)
+        getByName("wasmJsMain").dependsOn(webMain)
 
         getByName("jvmMain") {
             dependencies {
@@ -559,4 +582,182 @@ mavenPublishing {
             url.set("https://github.com/Enaium/webrtc-agc2-kmp/issues")
         }
     }
+}
+
+// ==================== wasm: build the AGC2 module ====================
+// Kotlin/Wasm has no cinterop and cannot embed the static library, so the same
+// C API (jni/c_api) is compiled to a standalone Emscripten module
+// (agc2_wasm.js + agc2_wasm.wasm) that the js and wasmJs actuals drive through
+// the JS glue in wasm/agc2_kmp_glue.js.
+
+fun emsdkPath(): String {
+    System.getenv("EMSDK")?.takeIf { it.isNotBlank() }?.let { return it }
+    providers.gradleProperty("wasm.emsdk").orNull?.takeIf { it.isNotBlank() }?.let { return it }
+    val home = System.getProperty("user.home")
+    listOf(File(home, "emsdk"), File(home, "sdk/emsdk"))
+        .forEach { if (it.isDirectory()) return it.absolutePath }
+    return ""
+}
+
+val wasmEmsdk = emsdkPath()
+val wasmEmxx = File(wasmEmsdk, "upstream/emscripten/em++")
+val wasmToolchain = File(wasmEmsdk, "upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
+val agc2WasmDir = projectDir.resolve("wasm")
+val agc2WasmOutput = layout.buildDirectory.dir("wasmAgc2").get().asFile
+
+// Emscripten requires Python >= 3.10; the emsdk ships its own interpreter,
+// which may not be on PATH (e.g. macOS ships Python 3.9 as /usr/bin/python3).
+fun wasmEnv(): Map<String, String> {
+    val pythonDir = File(wasmEmsdk, "python").listFiles()?.firstOrNull { it.isDirectory }
+    return if (pythonDir != null) {
+        mapOf("PATH" to "${pythonDir.absolutePath}/bin:${System.getenv("PATH")}")
+    } else {
+        emptyMap()
+    }
+}
+
+/** Every `webrtc_agc2_*` function the C API header declares, as emcc exports. */
+fun agc2CExports(): String = Regex("webrtc_agc2_\\w+(?=\\()")
+    .findAll(rootProject.file("jni/c_api/webrtc_agc2_c.h").readText())
+    .map { it.value }
+    .distinct()
+    .joinToString(",") { "_$it" }
+
+tasks.register<Exec>("configureWasmAgc2") {
+    onlyIf { wasmEmsdk.isNotEmpty() }
+    doFirst {
+        File(agc2WasmOutput, "cmake").mkdirs()
+        agc2WasmOutput.mkdirs()
+    }
+    workingDir = File(agc2WasmOutput, "cmake")
+    environment(wasmEnv())
+    // A toolchain file disables the generator's normal make discovery, so the
+    // make program must be passed explicitly (emcmake does the same).
+    val makeProgram = if (hostOs.isWindows) "nmake" else "/usr/bin/make"
+    commandLine(
+        cmakeExecutable, jniDir.absolutePath,
+        "-DBUILD_JNI=OFF",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_TOOLCHAIN_FILE=${wasmToolchain.absolutePath}",
+        "-DCMAKE_MAKE_PROGRAM=${makeProgram}",
+    )
+}
+
+tasks.register<Exec>("buildWasmAgc2") {
+    onlyIf { wasmEmsdk.isNotEmpty() }
+    dependsOn("configureWasmAgc2")
+    workingDir = File(agc2WasmOutput, "cmake")
+    environment(wasmEnv())
+    commandLine(cmakeExecutable, "--build", ".", "--config", "Release")
+}
+
+tasks.register<Exec>("linkWasmAgc2") {
+    onlyIf { wasmEmsdk.isNotEmpty() }
+    dependsOn("buildWasmAgc2")
+    workingDir = agc2WasmDir
+    environment(wasmEnv())
+    doFirst {
+        agc2WasmOutput.mkdirs()
+        // em++ (not emcc): the library is C++ and needs libc++/libc++abi on
+        // the link line.
+        commandLine(
+            wasmEmxx.absolutePath,
+            File(agc2WasmOutput, "cmake/libwebrtc_agc2.a").absolutePath,
+            "-o", File(agc2WasmOutput, "agc2_wasm.js").absolutePath,
+            "-sMODULARIZE=1", "-sEXPORT_NAME=Agc2Module", "-sEXPORT_ES6=1",
+            "-sEXPORTED_FUNCTIONS=${agc2CExports()},_malloc,_free",
+            "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAP32,HEAPU32,HEAPF32,HEAPF64",
+            "-sALLOW_MEMORY_GROWTH=1", "-sINITIAL_MEMORY=67108864",
+            "-sENVIRONMENT=web,worker,node",
+            "--no-entry",
+        )
+    }
+    inputs.file(rootProject.file("jni/c_api/webrtc_agc2_c.h"))
+    inputs.file(File(agc2WasmOutput, "cmake/libwebrtc_agc2.a"))
+    outputs.file(File(agc2WasmOutput, "agc2_wasm.js"))
+    outputs.file(File(agc2WasmOutput, "agc2_wasm.wasm"))
+}
+
+// ==================== wasm: npm package ====================
+// The Emscripten module and the JS glue ship as an npm package
+// (@enaium/webrtc-agc2-kmp) instead of a Maven "assets" jar: web apps depend on
+// it like any other npm package and `import { initAgc2Kmp } from
+// "@enaium/webrtc-agc2-kmp"` before running the Kotlin module, so no asset
+// extraction step is involved. The package version is the project version, so
+// Maven and npm share it.
+
+val npmPackageVersion: String by lazy { project.version.toString() }
+
+val wasmNpmDir = layout.buildDirectory.dir("npm").get().asFile
+val wasmGlue = agc2WasmDir.resolve("agc2_kmp_glue.js")
+
+tasks.register("assembleWasmNpm") {
+    group = "build"
+    description = "Stages the @enaium/webrtc-agc2-kmp npm package in build/npm."
+    dependsOn("linkWasmAgc2")
+    inputs.file(wasmGlue)
+    // The version comes from the Gradle version, so a bump must re-stage.
+    inputs.property("npmPackageVersion", npmPackageVersion)
+    inputs.file(File(agc2WasmOutput, "agc2_wasm.js"))
+    inputs.file(File(agc2WasmOutput, "agc2_wasm.wasm"))
+    outputs.dir(wasmNpmDir)
+    doLast {
+        wasmNpmDir.deleteRecursively()
+        wasmNpmDir.mkdirs()
+        wasmGlue.copyTo(wasmNpmDir.resolve("agc2_kmp_glue.js"), overwrite = true)
+        File(agc2WasmOutput, "agc2_wasm.js").copyTo(wasmNpmDir.resolve("agc2_wasm.js"), overwrite = true)
+        File(agc2WasmOutput, "agc2_wasm.wasm").copyTo(wasmNpmDir.resolve("agc2_wasm.wasm"), overwrite = true)
+        wasmNpmDir.resolve("package.json").writeText(
+            """
+            {
+              "name": "@enaium/webrtc-agc2-kmp",
+              "version": "$npmPackageVersion",
+              "description": "Emscripten-compiled WebRTC AGC2 module and JS glue for the webrtc-agc2-kmp js/wasmJs targets",
+              "license": "BSD-3-Clause",
+              "type": "module",
+              "exports": {
+                ".": "./agc2_kmp_glue.js",
+                "./agc2_wasm.js": "./agc2_wasm.js",
+                "./package.json": "./package.json"
+              },
+              "files": ["agc2_kmp_glue.js", "agc2_wasm.js", "agc2_wasm.wasm"],
+              "homepage": "https://github.com/Enaium/webrtc-agc2-kmp",
+              "repository": {
+                "type": "git",
+                "url": "git+https://github.com/Enaium/webrtc-agc2-kmp.git"
+              }
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+tasks.register<Exec>("publishWasmNpm") {
+    group = "publishing"
+    description = "Publishes @enaium/webrtc-agc2-kmp to npm (token: npm.publish.key)."
+    dependsOn("assembleWasmNpm")
+    workingDir = wasmNpmDir
+    // The token lives in the user-level Gradle properties file
+    // (~/.gradle/gradle.properties, next to mavenCentralUsername and the
+    // signing.* entries); CI writes the same key there from a repository
+    // secret. `-Pnpm.publish.key=<token>` overrides it for one-off runs.
+    val npmKey = providers.gradleProperty("npm.publish.key")
+    doFirst {
+        val key = npmKey.orNull?.takeIf { it.isNotBlank() }
+            ?: throw GradleException(
+                "npm.publish.key is not set: add it to ~/.gradle/gradle.properties " +
+                    "or pass -Pnpm.publish.key=<token>",
+            )
+        // NODE_AUTH_TOKEN is expanded by npm through the environment, so the
+        // token never lands in the package.json/tarball; .npmrc is on npm's
+        // never-publish list anyway.
+        environment("NODE_AUTH_TOKEN", key)
+        wasmNpmDir.resolve(".npmrc").writeText(
+            "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n",
+        )
+    }
+    // A rolling version (1.0.1-rolling.<tag>) is a semver prerelease, so npm
+    // requires an explicit tag; `latest` keeps `npm i @enaium/webrtc-agc2-kmp`
+    // working.
+    commandLine("npm", "publish", "--access", "public", "--tag", "latest")
 }

@@ -29,6 +29,8 @@ An RNN voice activity detector (`rnn_vad/`) inside the module drives the adaptiv
 | **Windows**    | mingwX64                                                     | Kotlin/Native cinterop (static library)    |
 | **tvOS**       | arm64, simulatorArm64                                        | Kotlin/Native cinterop (static library)    |
 | **watchOS**    | arm64, simulatorArm64, deviceArm64                           | Kotlin/Native cinterop (static library)    |
+| **Browser (wasmJs)** | wasm32                                                 | Emscripten module, `@enaium/webrtc-agc2-kmp` npm package |
+| **Browser (js)**     | JS                                                     | same module and glue, Kotlin/JS bindings   |
 
 ## Gradle Dependency
 
@@ -37,6 +39,30 @@ An RNN voice activity detector (`rnn_vad/`) inside the module drives the adaptiv
 ```kotlin
 implementation("cn.enaium.webrtc.agc2:webrtc-agc2-kmp:1.0.1")
 ```
+
+**Browser (js / wasmJs):** the klib comes from the same Maven coordinate, but the
+C library cannot be linked into wasm, so the same C API is compiled to an
+Emscripten module and shipped separately as an npm package. The page has to
+initialize it before the Kotlin module runs:
+
+```bash
+npm i @enaium/webrtc-agc2-kmp
+```
+
+```html
+<script type="importmap">
+  { "imports": { "@enaium/webrtc-agc2-kmp": "./node_modules/@enaium/webrtc-agc2-kmp/agc2_kmp_glue.js" } }
+</script>
+<script type="module">
+  import { initAgc2Kmp } from '@enaium/webrtc-agc2-kmp';
+  await initAgc2Kmp();
+  await import('./your-kotlin-wasm-module.mjs');
+</script>
+```
+
+`initAgc2Kmp()` instantiates `agc2_wasm.js/.wasm` and publishes every
+`webrtc_agc2_*` export the bindings call; without it the first AGC2 call fails
+with an undefined function.
 
 > Built with Kotlin 2.4.10: consumers need a Kotlin 2.4+ compiler, since older ones cannot read the 2.4 metadata of the published artifacts.
 
@@ -201,7 +227,7 @@ A Kotlin Multiplatform app (JVM desktop, macOS/Linux/Windows native executables,
 - **AGC2 controls** — bypass, adaptive digital, input volume controller, internal VAD (each rebuilding the controller), fixed gain (live), applied input volume (0–255) with auto-apply, source level and playback level
 - **Audio driven from the render loop** — the window pulls the capture device with non-blocking reads, runs every 10 ms frame through AGC2 and pushes what comes out to the playback device with non-blocking writes; the devices buffer ten frames, far more than one UI frame, so a slow frame cannot drop audio. A pump processes at most four frames and drops the older backlog (the *details* section counts it), which is what keeps one slow frame from turning into a slower one. Opening and closing a device is the one call in that path that can block (a microphone permission prompt, a device that is still starting, a sample rate to negotiate), so it runs on a thread of its own — switching to *Microphone* never waits for the device
 - **Audible result** — the AGC2 output is played through the output device, so the gain is not just visible
-- **Browser build** — the same UI source compiles to `wasmJs` (SDL3, Dear ImGui and the Web Audio backend are all published as wasm): `:examples:waveform:copyWasmAssets` assembles `build/browserApp/`, a static page serving the Kotlin/Wasm executable next to the `@enaium/*` npm glue packages. AGC2 has no wasm target, so there the pipeline plays the capture through at the fixed gain instead: the browser build's adaptive controls report themselves off rather than pretending to run. Web Audio needs a user gesture, so the page starts silent until the canvas is clicked
+- **Browser build** — the same UI source compiles to `wasmJs`; SDL3, Dear ImGui and the Web Audio backend are published as wasm, and AGC2 runs there too through the Emscripten module `:agc2` builds. `:examples:waveform:copyWasmAssets` assembles `build/browserApp/`, a static page serving the Kotlin/Wasm executable next to the `@enaium/*` npm glue packages. Only the device handling differs from native: Web Audio cannot block, so the stream is polled from the render loop instead of a device thread. Web Audio needs a user gesture, so the page starts silent until the canvas is clicked
 
 ```bash
 ./gradlew :examples:waveform:jvmRun                  # desktop JVM
@@ -233,6 +259,17 @@ cd webrtc-agc2-kmp
 ```bash
 ./gradlew :agc2:publishToMavenLocal
 ```
+
+### Build the browser module and publish it to npm
+
+```bash
+./gradlew :agc2:assembleWasmNpm -Pwasm.emsdk="$HOME/emsdk"   # build/npm: @enaium/webrtc-agc2-kmp
+node agc2/wasm/test_node.mjs agc2/build/npm                  # smoke test, no browser needed
+./gradlew :agc2:publishWasmNpm -Pwasm.emsdk="$HOME/emsdk"    # token: npm.publish.key
+```
+
+The Emscripten SDK path comes from `$EMSDK`, `-Pwasm.emsdk=...` or `~/emsdk`.
+The Gradle version is the npm version, so Maven and npm share it.
 
 ### Run tests
 

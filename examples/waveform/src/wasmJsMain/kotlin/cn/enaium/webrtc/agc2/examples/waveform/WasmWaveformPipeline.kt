@@ -30,6 +30,13 @@ import cn.enaium.audio.AudioOutput
 import cn.enaium.audio.AudioSystem
 import cn.enaium.audio.audioSystem
 import cn.enaium.sdl.SDL
+import cn.enaium.webrtc.agc2.Agc2GainController
+import cn.enaium.webrtc.agc2.agc2Version
+import cn.enaium.webrtc.agc2.createAgc2AudioBuffer
+import cn.enaium.webrtc.agc2.createAgc2Config
+import cn.enaium.webrtc.agc2.createAgc2Environment
+import cn.enaium.webrtc.agc2.createAgc2GainController
+import cn.enaium.webrtc.agc2.createAgc2InputVolumeConfig
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -49,15 +56,21 @@ private const val CAPTURE_BUFFER_FRAMES = 4
 /** Playback frames queued ahead of the device. */
 private const val PLAYBACK_CHUNK_FRAMES = 4
 
+/** Channels the browser build captures, processes and plays. */
+private const val WASM_CHANNELS = 1
+
+/** Scale WebRTC's FloatS16 frames are in: full scale is 32768, not 1. */
+private const val WASM_AGC_SCALE = 32_768f
+
 /**
  * The waveform pipeline as a browser can run it.
  *
- * AGC2 is a C++ library linked through a native cinterop klib, which has no
- * wasm target, so this pipeline plays the capture through instead: the input
- * is copied to the output with the fixed digital gain the UI sets, and the
- * adaptive controls (they all configure the AGC2 controller) have nothing to
- * drive. The scopes, level histories and replay work exactly as on the native
- * targets, and audio-io-kmp's WebAudio backend does the capturing and playing.
+ * The same AGC2 controller the native targets link through cinterop runs here:
+ * the browser build links the C API compiled to wasm by Emscripten (the
+ * @enaium/webrtc-agc2-kmp npm package, initialized by the page) and the js /
+ * wasmJs bindings call it. Only the device handling differs: Web Audio cannot
+ * block, so the capture and playback streams are polled from the render loop
+ * instead of running on a device thread.
  */
 class WasmWaveformPipeline(
     windowSamples: Int,
@@ -111,17 +124,10 @@ class WasmWaveformPipeline(
      * not estimated per frame: whatever the UI sets is applied to the capture.
      */
     override var fixedDigitalGainDb: Float = 0f
-        set(value) {
-            if (field == value) return
-            field = value
-            appliedFixedGain = dbfsToAmplitude(value)
-        }
 
-    // The adaptive controllers live in AGC2. Reporting them as off tells the
-    // UI the truth about this build instead of pretending they run.
-    override var adaptiveDigitalEnabled: Boolean = false
-    override var inputVolumeControllerEnabled: Boolean = false
-    override var useInternalVad: Boolean = false
+    override var adaptiveDigitalEnabled: Boolean = true
+    override var inputVolumeControllerEnabled: Boolean = true
+    override var useInternalVad: Boolean = true
     override var appliedInputVolume: Int = 255
     override var autoApplyRecommendedVolume: Boolean = false
 
@@ -187,7 +193,6 @@ class WasmWaveformPipeline(
     private var replayRead = 0
     private var replayLength = 0
 
-    private var appliedFixedGain = 1f
 
     private var input: AudioInput? = null
 
@@ -196,6 +201,59 @@ class WasmWaveformPipeline(
     private var closed = false
 
     private var nextGeneratedFrame = 0uL
+
+    // ==================== AGC2 ====================
+
+    private val agc2Config = createAgc2Config().apply {
+        // The switch is app level: it decides whether the controller runs at
+        // all, so the configuration itself always says enabled.
+        enabled = true
+        adaptiveDigitalEnabled = this@WasmWaveformPipeline.adaptiveDigitalEnabled
+        inputVolumeControllerEnabled = this@WasmWaveformPipeline.inputVolumeControllerEnabled
+        fixedDigitalGainDb = this@WasmWaveformPipeline.fixedDigitalGainDb
+    }
+
+    private val agc2InputVolumeConfig = createAgc2InputVolumeConfig()
+
+    private val agc2Environment = createAgc2Environment()
+
+    private val agc2Buffer = createAgc2AudioBuffer(SAMPLE_RATE, WASM_CHANNELS)
+
+    private var appliedFixedGainDb = 0f
+
+    private var lastAppliedInputVolume = -1
+
+    private var controller: Agc2GainController = buildController()
+
+    init {
+        report("AGC2 $agc2Version via $systemName, $format frame $WASM_FRAME_SAMPLES samples")
+    }
+
+    private fun buildController(): Agc2GainController = createAgc2GainController(
+        env = agc2Environment,
+        config = agc2Config,
+        inputVolumeConfig = agc2InputVolumeConfig,
+        sampleRate = SAMPLE_RATE,
+        channels = WASM_CHANNELS,
+        useInternalVad = useInternalVad,
+    )
+
+    private fun rebuildController() {
+        val previous = controller
+        controller = buildController()
+        previous.close()
+        report(
+            "controller rebuilt: adaptive $adaptiveDigitalEnabled, " +
+                "input volume controller $inputVolumeControllerEnabled, internal VAD $useInternalVad",
+        )
+    }
+
+    private fun applyControls() {
+        if (fixedDigitalGainDb != appliedFixedGainDb) {
+            appliedFixedGainDb = fixedDigitalGainDb
+            controller.setFixedGainDb(fixedDigitalGainDb)
+        }
+    }
 
     override fun startRecording() {
         if (closed || recording) return
@@ -234,16 +292,23 @@ class WasmWaveformPipeline(
     }
 
     override fun setAdaptiveDigitalEnabled(enabled: Boolean) {
-        // AGC2's controller does not exist here; the flag is kept for the UI.
+        if (adaptiveDigitalEnabled == enabled) return
         adaptiveDigitalEnabled = enabled
+        agc2Config.adaptiveDigitalEnabled = enabled
+        rebuildController()
     }
 
     override fun setInputVolumeControllerEnabled(enabled: Boolean) {
+        if (inputVolumeControllerEnabled == enabled) return
         inputVolumeControllerEnabled = enabled
+        agc2Config.inputVolumeControllerEnabled = enabled
+        rebuildController()
     }
 
     override fun setUseInternalVad(enabled: Boolean) {
+        if (useInternalVad == enabled) return
         useInternalVad = enabled
+        rebuildController()
     }
 
     override fun pump() {
@@ -269,6 +334,11 @@ class WasmWaveformPipeline(
         recording = false
         closeCapture()
         closeOutput()
+        controller.close()
+        agc2Buffer.close()
+        agc2Environment.close()
+        agc2InputVolumeConfig.close()
+        agc2Config.close()
         system.close()
     }
 
@@ -303,15 +373,41 @@ class WasmWaveformPipeline(
     }
 
     private fun processFrame(frame: FloatArray) {
-        // No AGC2: the capture is what gets played, scaled by the fixed gain.
-        val gain = if (agcEnabled) appliedFixedGain else 1f
-        for (i in 0 until WASM_FRAME_SAMPLES) outputFrame[i] = frame[i] * gain
+        applyControls()
+
+        for (i in 0 until WASM_FRAME_SAMPLES) captureFrame[i] = frame[i] * WASM_AGC_SCALE
+
+        val outputSamples: FloatArray
+        if (agcEnabled) {
+            agc2Buffer.writeChannel(0, captureFrame)
+            // There is no audio HAL here either, so "the input volume changed
+            // since the previous call" is what the slider - or the
+            // recommendation fed back into it - did since the last frame.
+            val volume = appliedInputVolume.coerceIn(0, 255)
+            val changed = volume != lastAppliedInputVolume
+            lastAppliedInputVolume = volume
+            controller.analyze(volume, agc2Buffer)
+            controller.process(changed, agc2Buffer)
+            outputSamples = agc2Buffer.readChannel(0)
+
+            val recommended = controller.recommendedInputVolume
+            recommendedInputVolume = recommended
+            if (autoApplyRecommendedVolume && recommended != null) {
+                appliedInputVolume = recommended.coerceIn(0, 255)
+            }
+        } else {
+            // Bypassed: what the capture produced is what gets played.
+            outputSamples = captureFrame
+            recommendedInputVolume = null
+        }
+
+        for (i in 0 until WASM_FRAME_SAMPLES) outputFrame[i] = outputSamples[i] / WASM_AGC_SCALE
 
         inputScope.append(frame, WASM_FRAME_SAMPLES)
         outputScope.append(outputFrame, WASM_FRAME_SAMPLES)
 
-        inputDbfs = rmsDbfs(frame)
-        outputDbfs = rmsDbfs(outputFrame)
+        inputDbfs = rmsDbfs(captureFrame)
+        outputDbfs = rmsDbfs(outputSamples)
         appliedGainDb = if (inputDbfs.isFinite()) outputDbfs - inputDbfs else 0f
         inputHistory.append(inputDbfs)
         outputHistory.append(outputDbfs)
@@ -402,7 +498,10 @@ class WasmWaveformPipeline(
 
     private fun rmsDbfs(values: FloatArray): Float {
         var sum = 0.0
-        for (value in values) sum += (value * value).toDouble()
+        for (value in values) {
+            val normalized = value / WASM_AGC_SCALE
+            sum += (normalized * normalized).toDouble()
+        }
         val rms = sqrt(sum / values.size)
         return if (rms <= 0.0) Float.NEGATIVE_INFINITY else (20.0 * log10(rms)).toFloat()
     }

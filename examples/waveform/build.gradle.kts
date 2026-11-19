@@ -181,6 +181,10 @@ kotlin {
         }
         jvmMain.get().dependsOn(agc2Main)
         nativeMain.get().dependsOn(agc2Main)
+        // The browser build links AGC2 too: :agc2 publishes js and wasmJs
+        // targets that drive the Emscripten module, so the pipeline is the
+        // same class the desktop and native targets use.
+        wasmJsMain.get().dependsOn(agc2Main)
     }
 }
 
@@ -230,9 +234,11 @@ val wasmWorkDir = layout.projectDirectory.dir("wasm")
 val installedSdlPackage = wasmWorkDir.dir("node_modules/@enaium/sdl-kmp")
 val installedImguiPackage = wasmWorkDir.dir("node_modules/@enaium/imgui-kmp")
 val installedAudioIoPackage = wasmWorkDir.dir("node_modules/@enaium/audio-io-kmp")
+val installedAgc2Package = wasmWorkDir.dir("node_modules/@enaium/webrtc-agc2-kmp")
 
 val npmInstall = tasks.register<Exec>("npmInstall") {
-    description = "Installs the browser build's npm dependencies (the SDL3 and imgui glue)."
+    description = "Installs the browser build's npm dependencies (the SDL3, imgui and AGC2 glue)."
+    dependsOn(":agc2:assembleWasmNpm")
     workingDir = wasmWorkDir.asFile
     commandLine("npm", "install", "--no-audit", "--no-fund")
     inputs.file(wasmWorkDir.file("package.json"))
@@ -254,6 +260,9 @@ val copyWasmAssets = tasks.register<Copy>("copyWasmAssets") {
     }
     from(provider { installedAudioIoPackage.asFile.canonicalFile }) {
         into("node_modules/@enaium/audio-io-kmp")
+    }
+    from(provider { installedAgc2Package.asFile.canonicalFile }) {
+        into("node_modules/@enaium/webrtc-agc2-kmp")
     }
     from(layout.buildDirectory.dir("compileSync/wasmJs/main/developmentExecutable/kotlin")) {
         include("**")

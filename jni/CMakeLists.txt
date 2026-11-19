@@ -54,6 +54,11 @@ elseif(WIN32)
         # mingw-w64 libc headers resolve.
         target_include_directories(webrtc_agc2 SYSTEM PRIVATE /usr/x86_64-w64-mingw32/include)
     endif()
+elseif(EMSCRIPTEN)
+    # wasm32 has no thread-local Linux APIs and no prctl; the POSIX paths cover
+    # what the library uses (rtc_base/system/arch.h already has an
+    # __EMSCRIPTEN__ branch).
+    target_compile_definitions(webrtc_agc2 PRIVATE WEBRTC_POSIX)
 elseif(UNIX AND NOT APPLE)
     target_compile_definitions(webrtc_agc2 PRIVATE WEBRTC_LINUX WEBRTC_POSIX)
 endif()
@@ -78,7 +83,15 @@ endif()
 
 message(STATUS "EFFECTIVE_ARCH: ${EFFECTIVE_ARCH}")
 
-if(NOT (EFFECTIVE_ARCH MATCHES "x86_64|AMD64|amd64|i686|x86"))
+if(EMSCRIPTEN)
+    # wasm32: emcc rejects -msse/-mavx2 without -msimd128, and the scalar
+    # implementations is what the module uses, so every runtime-dispatched SIMD
+    # translation unit is left out.
+    list(FILTER AGC2_SRC EXCLUDE REGEX ".*_avx2\\.cc$")
+    list(FILTER AGC2_SRC EXCLUDE REGEX ".*_sse2\\.cc$")
+    list(FILTER AGC2_SRC EXCLUDE REGEX ".*_sse\\.cc$")
+    list(FILTER AGC2_SRC EXCLUDE REGEX ".*_neon\\.cc$")
+elseif(NOT (EFFECTIVE_ARCH MATCHES "x86_64|AMD64|amd64|i686|x86"))
     # Non-x86: exclude AVX2 and SSE files (not available on ARM).
     list(FILTER AGC2_SRC EXCLUDE REGEX ".*_avx2\\.cc$")
     list(FILTER AGC2_SRC EXCLUDE REGEX ".*_sse2\\.cc$")
@@ -155,7 +168,7 @@ endif()
 # Only the Kotlin/Native builds (BUILD_JNI=OFF): the JNI shared libraries link
 # the libstdc++ of the machine that runs them, and the Apple and Android native
 # targets use libc++ throughout.
-if(NOT MSVC AND NOT APPLE AND NOT ANDROID AND NOT BUILD_JNI)
+if(NOT MSVC AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN AND NOT BUILD_JNI)
     target_compile_definitions(webrtc_agc2 PRIVATE _GLIBCXX_USE_CXX11_ABI=0)
     target_sources(webrtc_agc2 PRIVATE ${C_API_DIR}/webrtc_agc2_kn_compat.cc)
 endif()
