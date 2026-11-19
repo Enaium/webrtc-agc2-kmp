@@ -160,6 +160,10 @@ jobs:
           node agc2/wasm/test_node.mjs agc2/build/npm
 
       - name: Publish the @enaium/webrtc-agc2-kmp npm package
+        # The token is optional: without it the module is still built and
+        # smoke-tested above, and the package is published from a developer
+        # machine instead of failing the run.
+        if: env.NPM_PUBLISH_KEY != ''
         run: |
           install -d "$HOME/.gradle"
           printf 'npm.publish.key=%s\n' "$NPM_PUBLISH_KEY" >> "$HOME/.gradle/gradle.properties"
